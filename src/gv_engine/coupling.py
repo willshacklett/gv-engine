@@ -7,16 +7,15 @@ def coupling_drift(
     max_val: float,
 ) -> float:
     """
-    Measures counterfactual deviation:
-    How much did this constraint change vs how it *would have* changed independently.
+    Counterfactual deviation: how much did the system move
+    differently than it would have independently?
     Returns value in [0, 1].
     """
-
     actual_delta = curr_value - prev_value
-
     expected_delta = inflow - base_leak_rate * (prev_value - min_val)
 
-    denom = abs(expected_delta) + 1e-9
-    drift = abs(actual_delta - expected_delta) / denom
+    if abs(expected_delta) < 1e-9:
+        return 0.0
 
-    return min(max(drift, 0.0), 1.0)
+    drift = abs(actual_delta - expected_delta) / (max_val - min_val)
+    return max(0.0, min(drift, 1.0))
