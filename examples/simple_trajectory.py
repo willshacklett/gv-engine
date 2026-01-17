@@ -6,7 +6,6 @@ Demonstrates:
 - GV-style scalar metrics
 """
 
-import inspect
 import numpy as np
 import matplotlib.pyplot as plt
 
@@ -22,27 +21,12 @@ INFLOW_A = 0.6
 INFLOW_B = 0.4
 COUPLING = 0.25
 
+# coupling_drift signature: (a: float, b: float, strength: float = 0.01) -> float
+COUPLING_DRIFT_STRENGTH = 0.01
+
 
 def clamp(x, lo=0.0, hi=CAPACITY):
     return max(lo, min(hi, float(x)))
-
-
-def call_coupling_drift(fn, /, *args, **kwargs):
-    """
-    Call coupling_drift() safely across signature changes.
-
-    - If the function expects prev_val (not prev_value), we rename it.
-    - We drop any unexpected kwargs so the example never crashes.
-    """
-    sig = inspect.signature(fn)
-    params = sig.parameters
-
-    # Back-compat rename (common mismatch)
-    if "prev_value" in kwargs and "prev_value" not in params and "prev_val" in params:
-        kwargs["prev_val"] = kwargs.pop("prev_value")
-
-    filtered = {k: v for k, v in kwargs.items() if k in params}
-    return fn(*args, **filtered)
 
 
 def simulate_decoupled(steps: int):
@@ -80,9 +64,9 @@ def simulate_coupled(steps: int):
 def compute_scalars(a: np.ndarray, b: np.ndarray):
     """
     Returns three scalar series:
-    - satisfaction drift: how fast the "free capacity" is shrinking
-    - coupling drift: wrapper around gv_engine.coupling_drift
-    - reversibility proxy: how hard it would be to "undo" recent growth
+    - sat_d: shrinking of remaining capacity (proxy)
+    - coup_d: gv_engine.coupling_drift(a, b, strength)
+    - rev_d: magnitude of recent change (proxy)
     """
     sat_d = np.zeros_like(a)
     coup_d = np.zeros_like(a)
@@ -95,26 +79,13 @@ def compute_scalars(a: np.ndarray, b: np.ndarray):
         at = float(a[t])
         bt = float(b[t])
 
-        # Satisfaction drift: shrinking of remaining headroom (simple proxy)
         headroom_prev = (CAPACITY - prev_a) + (CAPACITY - prev_b)
         headroom_now = (CAPACITY - at) + (CAPACITY - bt)
-        sat_d[t] = headroom_prev - headroom_now  # >0 means consuming headroom
+        sat_d[t] = headroom_prev - headroom_now
 
-        # Coupling drift: call engine function safely
-        # We pass both prev_value and prev_val style kwargs via wrapper logic.
-        coup_d[t] = call_coupling_drift(
-            coupling_drift,
-            a=at,
-            b=bt,
-            prev_value=prev_a,   # old name used in your earlier example
-            prev_a=prev_a,       # some signatures may use prev_a/prev_b
-            prev_b=prev_b,
-            max_val=CAPACITY,    # some signatures may want max_val/capacity
-            capacity=CAPACITY,
-            coupling=COUPLING,
-        )
+        # ✅ Correct call for your current function signature
+        coup_d[t] = coupling_drift(at, bt, strength=COUPLING_DRIFT_STRENGTH)
 
-        # Reversibility proxy: larger recent step = harder to undo (simple proxy)
         rev_d[t] = abs(at - prev_a) + abs(bt - prev_b)
 
         prev_a, prev_b = at, bt
@@ -123,12 +94,8 @@ def compute_scalars(a: np.ndarray, b: np.ndarray):
 
 
 def try_gv_score(a: np.ndarray, b: np.ndarray):
-    """
-    Optional: attempt to compute gv_score if the API matches.
-    If gv_score signature differs, we just return None.
-    """
+    """Optional: compute gv_score if the Constraint API matches."""
     try:
-        # Common pattern: make constraints and score
         cA = Constraint(value=float(a[-1]), max_val=CAPACITY, name="A")
         cB = Constraint(value=float(b[-1]), max_val=CAPACITY, name="B")
         return gv_score([cA, cB])
@@ -137,15 +104,12 @@ def try_gv_score(a: np.ndarray, b: np.ndarray):
 
 
 def main():
-    # Simulate
     a_dec, b_dec = simulate_decoupled(STEPS)
     a_cpl, b_cpl = simulate_coupled(STEPS)
 
-    # Scalars
     sat_d_dec, coup_d_dec, rev_d_dec = compute_scalars(a_dec, b_dec)
     sat_d_cpl, coup_d_cpl, rev_d_cpl = compute_scalars(a_cpl, b_cpl)
 
-    # Plot trajectories
     t = np.arange(STEPS)
 
     plt.figure()
@@ -159,7 +123,6 @@ def main():
     plt.legend()
     plt.tight_layout()
 
-    # Plot scalars
     plt.figure()
     plt.plot(t, sat_d_dec, label="sat_d (decoupled)")
     plt.plot(t, sat_d_cpl, label="sat_d (coupled)")
@@ -187,7 +150,6 @@ def main():
     plt.legend()
     plt.tight_layout()
 
-    # Optional gv_score printout
     gv_dec = try_gv_score(a_dec, b_dec)
     gv_cpl = try_gv_score(a_cpl, b_cpl)
     if gv_dec is not None or gv_cpl is not None:
