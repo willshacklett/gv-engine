@@ -5,18 +5,21 @@ import math
 
 @dataclass(frozen=True)
 class Constraint:
+    """
+    A measurable constraint with a capacity limit.
+    """
     name: str
     value: float
     capacity: float
     weight: float = 1.0
 
     def utilization(self) -> float:
-        return min(self.value / self.capacity, 1.0)
+        return self.value / self.capacity
 
 
 def gv_score(constraints: Iterable[Constraint], p: float = 2.0) -> float:
     """
-    Scalar strain score.
+    Compute a scalar strain score.
     0.0 = ideal
     higher = worse
     """
@@ -24,6 +27,5 @@ def gv_score(constraints: Iterable[Constraint], p: float = 2.0) -> float:
     for c in constraints:
         u = c.utilization()
         k = 8.0
-        penalty = (math.exp(k * u) - 1) / (math.exp(k) - 1)
-        total += c.weight * (penalty ** p)
+        total += c.weight * math.log(1 + math.exp(k * (u - 1))) ** p
     return total
