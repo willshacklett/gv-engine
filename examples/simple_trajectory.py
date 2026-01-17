@@ -6,15 +6,16 @@ Demonstrates:
 - GV-style scalar metrics
 """
 
+import inspect
 import numpy as np
 import matplotlib.pyplot as plt
 
 from gv_engine import Constraint, gv_score, coupling_drift
 
 
-# -------------------------
+# ------------------------------
 # Parameters
-# -------------------------
+# ------------------------------
 STEPS = 200
 CAPACITY = 50.0
 INFLOW_A = 0.6
@@ -22,117 +23,179 @@ INFLOW_B = 0.4
 COUPLING = 0.25
 
 
-# -------------------------
-# Decoupled dynamics
-# -------------------------
-def run_decoupled():
-    a_vals = []
-    b_vals = []
-
-    a = 2.0
-    b = 2.0
-
-    for _ in range(STEPS):
-        a += INFLOW_A * (1.0 - a / CAPACITY)
-        b += INFLOW_B * (1.0 - b / CAPACITY)
-        a_vals.append(a)
-        b_vals.append(b)
-
-    return np.array(a_vals), np.array(b_vals)
+def clamp(x, lo=0.0, hi=CAPACITY):
+    return max(lo, min(hi, float(x)))
 
 
-# -------------------------
-# Coupled dynamics
-# -------------------------
-def run_coupled():
-    a_vals = []
-    b_vals = []
+def call_coupling_drift(fn, /, *args, **kwargs):
+    """
+    Call coupling_drift() safely across signature changes.
 
-    a = 2.0
-    b = 2.0
+    - If the function expects prev_val (not prev_value), we rename it.
+    - We drop any unexpected kwargs so the example never crashes.
+    """
+    sig = inspect.signature(fn)
+    params = sig.parameters
 
-    for _ in range(STEPS):
-        a += INFLOW_A * (1.0 - a / CAPACITY) + COUPLING * (b / CAPACITY)
-        b += INFLOW_B * (1.0 - b / CAPACITY) + COUPLING * (a / CAPACITY)
-        a_vals.append(a)
-        b_vals.append(b)
+    # Back-compat rename (common mismatch)
+    if "prev_value" in kwargs and "prev_value" not in params and "prev_val" in params:
+        kwargs["prev_val"] = kwargs.pop("prev_value")
 
-    return np.array(a_vals), np.array(b_vals)
+    filtered = {k: v for k, v in kwargs.items() if k in params}
+    return fn(*args, **filtered)
 
 
-# -------------------------
-# Scalar metrics
-# -------------------------
-def compute_scalars(a_vals, b_vals):
-    saturation = []
-    coupling_vals = []
-    reversibility = []
+def simulate_decoupled(steps: int):
+    """Two independent constraints filling toward capacity."""
+    a = np.zeros(steps, dtype=float)
+    b = np.zeros(steps, dtype=float)
+    for t in range(1, steps):
+        a[t] = clamp(a[t - 1] + INFLOW_A)
+        b[t] = clamp(b[t - 1] + INFLOW_B)
+    return a, b
 
-    prev_a = a_vals[0]
 
-    for a, b in zip(a_vals, b_vals):
-        ca = Constraint("A", a, CAPACITY)
-        cb = Constraint("B", b, CAPACITY)
+def simulate_coupled(steps: int):
+    """
+    Two constraints with simple symmetric coupling:
+    each step, a fraction of the delta tries to equalize A and B.
+    """
+    a = np.zeros(steps, dtype=float)
+    b = np.zeros(steps, dtype=float)
+    for t in range(1, steps):
+        # raw inflow
+        a_next = a[t - 1] + INFLOW_A
+        b_next = b[t - 1] + INFLOW_B
 
-        saturation.append(gv_score([ca, cb]))
+        # coupling exchange (equalize)
+        diff = a_next - b_next
+        a_next -= COUPLING * diff
+        b_next += COUPLING * diff
 
-        coupling_vals.append(
-            coupling_drift(
-                prev_value=prev_a,
-                curr_value=a,
-                inflow=INFLOW_A,
-                base_leak_rate=0.0,
-                min_val=0.0,
-                max_val=CAPACITY,
-            )
+        a[t] = clamp(a_next)
+        b[t] = clamp(b_next)
+    return a, b
+
+
+def compute_scalars(a: np.ndarray, b: np.ndarray):
+    """
+    Returns three scalar series:
+    - satisfaction drift: how fast the "free capacity" is shrinking
+    - coupling drift: wrapper around gv_engine.coupling_drift
+    - reversibility proxy: how hard it would be to "undo" recent growth
+    """
+    sat_d = np.zeros_like(a)
+    coup_d = np.zeros_like(a)
+    rev_d = np.zeros_like(a)
+
+    prev_a = float(a[0])
+    prev_b = float(b[0])
+
+    for t in range(1, len(a)):
+        at = float(a[t])
+        bt = float(b[t])
+
+        # Satisfaction drift: shrinking of remaining headroom (simple proxy)
+        headroom_prev = (CAPACITY - prev_a) + (CAPACITY - prev_b)
+        headroom_now = (CAPACITY - at) + (CAPACITY - bt)
+        sat_d[t] = headroom_prev - headroom_now  # >0 means consuming headroom
+
+        # Coupling drift: call engine function safely
+        # We pass both prev_value and prev_val style kwargs via wrapper logic.
+        coup_d[t] = call_coupling_drift(
+            coupling_drift,
+            a=at,
+            b=bt,
+            prev_value=prev_a,   # old name used in your earlier example
+            prev_a=prev_a,       # some signatures may use prev_a/prev_b
+            prev_b=prev_b,
+            max_val=CAPACITY,    # some signatures may want max_val/capacity
+            capacity=CAPACITY,
+            coupling=COUPLING,
         )
 
-        reversibility.append(1.0 - a / CAPACITY)
-        prev_a = a
+        # Reversibility proxy: larger recent step = harder to undo (simple proxy)
+        rev_d[t] = abs(at - prev_a) + abs(bt - prev_b)
 
-    return (
-        np.array(saturation),
-        np.array(coupling_vals),
-        np.array(reversibility),
-    )
+        prev_a, prev_b = at, bt
+
+    return sat_d, coup_d, rev_d
 
 
-# -------------------------
-# Run experiments
-# -------------------------
-a_dec, b_dec = run_decoupled()
-a_coup, b_coup = run_coupled()
+def try_gv_score(a: np.ndarray, b: np.ndarray):
+    """
+    Optional: attempt to compute gv_score if the API matches.
+    If gv_score signature differs, we just return None.
+    """
+    try:
+        # Common pattern: make constraints and score
+        cA = Constraint(value=float(a[-1]), max_val=CAPACITY, name="A")
+        cB = Constraint(value=float(b[-1]), max_val=CAPACITY, name="B")
+        return gv_score([cA, cB])
+    except Exception:
+        return None
 
-sat_d, coup_d, rev_d = compute_scalars(a_dec, b_dec)
-sat_c, coup_c, rev_c = compute_scalars(a_coup, b_coup)
+
+def main():
+    # Simulate
+    a_dec, b_dec = simulate_decoupled(STEPS)
+    a_cpl, b_cpl = simulate_coupled(STEPS)
+
+    # Scalars
+    sat_d_dec, coup_d_dec, rev_d_dec = compute_scalars(a_dec, b_dec)
+    sat_d_cpl, coup_d_cpl, rev_d_cpl = compute_scalars(a_cpl, b_cpl)
+
+    # Plot trajectories
+    t = np.arange(STEPS)
+
+    plt.figure()
+    plt.plot(t, a_dec, label="A (decoupled)")
+    plt.plot(t, b_dec, label="B (decoupled)")
+    plt.plot(t, a_cpl, label="A (coupled)")
+    plt.plot(t, b_cpl, label="B (coupled)")
+    plt.title("Constraint trajectories")
+    plt.xlabel("Step")
+    plt.ylabel("Value")
+    plt.legend()
+    plt.tight_layout()
+
+    # Plot scalars
+    plt.figure()
+    plt.plot(t, sat_d_dec, label="sat_d (decoupled)")
+    plt.plot(t, sat_d_cpl, label="sat_d (coupled)")
+    plt.title("Satisfaction drift (proxy)")
+    plt.xlabel("Step")
+    plt.ylabel("sat_d")
+    plt.legend()
+    plt.tight_layout()
+
+    plt.figure()
+    plt.plot(t, coup_d_dec, label="coupling_drift (decoupled)")
+    plt.plot(t, coup_d_cpl, label="coupling_drift (coupled)")
+    plt.title("Coupling drift (engine)")
+    plt.xlabel("Step")
+    plt.ylabel("coupling_drift")
+    plt.legend()
+    plt.tight_layout()
+
+    plt.figure()
+    plt.plot(t, rev_d_dec, label="rev_d (decoupled)")
+    plt.plot(t, rev_d_cpl, label="rev_d (coupled)")
+    plt.title("Reversibility proxy")
+    plt.xlabel("Step")
+    plt.ylabel("rev_d")
+    plt.legend()
+    plt.tight_layout()
+
+    # Optional gv_score printout
+    gv_dec = try_gv_score(a_dec, b_dec)
+    gv_cpl = try_gv_score(a_cpl, b_cpl)
+    if gv_dec is not None or gv_cpl is not None:
+        print(f"gv_score (decoupled end): {gv_dec}")
+        print(f"gv_score (coupled end):   {gv_cpl}")
+
+    plt.show()
 
 
-# -------------------------
-# Plot
-# -------------------------
-fig, axs = plt.subplots(2, 2, figsize=(12, 8))
-
-axs[0, 0].plot(a_coup, label="A")
-axs[0, 0].plot(b_coup, label="B")
-axs[0, 0].set_title("Constraint Trajectories (coupled)")
-axs[0, 0].legend()
-
-axs[1, 0].plot(sat_c, label="saturation")
-axs[1, 0].plot(coup_c, label="coupling_drift")
-axs[1, 0].plot(rev_c, label="reversibility_loss")
-axs[1, 0].set_title("GV-style Scalars (coupled)")
-axs[1, 0].legend()
-
-axs[0, 1].plot(a_dec, label="A")
-axs[0, 1].plot(b_dec, label="B")
-axs[0, 1].set_title("Constraint Trajectories (decoupled)")
-axs[0, 1].legend()
-
-axs[1, 1].plot(sat_d, label="saturation")
-axs[1, 1].plot(coup_d, label="coupling_drift")
-axs[1, 1].plot(rev_d, label="reversibility_loss")
-axs[1, 1].set_title("GV-style Scalars (decoupled)")
-axs[1, 1].legend()
-
-plt.tight_layout()
-plt.show()
+if __name__ == "__main__":
+    main()
