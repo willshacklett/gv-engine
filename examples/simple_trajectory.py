@@ -4,6 +4,7 @@ Simple trajectory experiment for gv-engine.
 Demonstrates:
 - Decoupled vs coupled constraint growth
 - GV-style scalar metrics
+- Normalized proxies + cumulative coupling drift (hidden work)
 """
 
 import numpy as np
@@ -63,10 +64,10 @@ def simulate_coupled(steps: int):
 
 def compute_scalars(a: np.ndarray, b: np.ndarray):
     """
-    Returns three scalar series:
-    - sat_d: shrinking of remaining capacity (proxy)
+    Returns three scalar series (all normalized, scale-free):
+    - sat_d: shrink of remaining headroom per step (normalized by total headroom 2*CAPACITY)
     - coup_d: gv_engine.coupling_drift(a, b, strength)
-    - rev_d: magnitude of recent change (proxy)
+    - rev_d: magnitude of recent change per step (normalized by 2*CAPACITY)
     """
     sat_d = np.zeros_like(a)
     coup_d = np.zeros_like(a)
@@ -81,12 +82,15 @@ def compute_scalars(a: np.ndarray, b: np.ndarray):
 
         headroom_prev = (CAPACITY - prev_a) + (CAPACITY - prev_b)
         headroom_now = (CAPACITY - at) + (CAPACITY - bt)
-        sat_d[t] = headroom_prev - headroom_now
 
-        # ✅ Correct call for your current function signature
+        # normalize by total headroom range (2*CAPACITY)
+        sat_d[t] = (headroom_prev - headroom_now) / (2.0 * CAPACITY)
+
+        # correct call for your current function signature
         coup_d[t] = coupling_drift(at, bt, strength=COUPLING_DRIFT_STRENGTH)
 
-        rev_d[t] = abs(at - prev_a) + abs(bt - prev_b)
+        # normalize by total possible per-step change scale (2*CAPACITY)
+        rev_d[t] = (abs(at - prev_a) + abs(bt - prev_b)) / (2.0 * CAPACITY)
 
         prev_a, prev_b = at, bt
 
@@ -94,7 +98,10 @@ def compute_scalars(a: np.ndarray, b: np.ndarray):
 
 
 def try_gv_score(a: np.ndarray, b: np.ndarray):
-    """Optional: compute gv_score if the Constraint API matches."""
+    """
+    Optional: compute gv_score if the Constraint API matches.
+    If not, return None (so the script still runs cleanly).
+    """
     try:
         cA = Constraint(value=float(a[-1]), max_val=CAPACITY, name="A")
         cB = Constraint(value=float(b[-1]), max_val=CAPACITY, name="B")
@@ -104,14 +111,21 @@ def try_gv_score(a: np.ndarray, b: np.ndarray):
 
 
 def main():
+    # Simulate
     a_dec, b_dec = simulate_decoupled(STEPS)
     a_cpl, b_cpl = simulate_coupled(STEPS)
 
+    # Scalars
     sat_d_dec, coup_d_dec, rev_d_dec = compute_scalars(a_dec, b_dec)
     sat_d_cpl, coup_d_cpl, rev_d_cpl = compute_scalars(a_cpl, b_cpl)
 
+    # NEW: cumulative coupling drift (integral / hidden work)
+    cum_coup_dec = np.cumsum(coup_d_dec)
+    cum_coup_cpl = np.cumsum(coup_d_cpl)
+
     t = np.arange(STEPS)
 
+    # 1) Trajectories
     plt.figure()
     plt.plot(t, a_dec, label="A (decoupled)")
     plt.plot(t, b_dec, label="B (decoupled)")
@@ -123,15 +137,17 @@ def main():
     plt.legend()
     plt.tight_layout()
 
+    # 2) Satisfaction drift (normalized)
     plt.figure()
     plt.plot(t, sat_d_dec, label="sat_d (decoupled)")
     plt.plot(t, sat_d_cpl, label="sat_d (coupled)")
-    plt.title("Satisfaction drift (proxy)")
+    plt.title("Satisfaction drift (normalized proxy)")
     plt.xlabel("Step")
     plt.ylabel("sat_d")
     plt.legend()
     plt.tight_layout()
 
+    # 3) Coupling drift (engine)
     plt.figure()
     plt.plot(t, coup_d_dec, label="coupling_drift (decoupled)")
     plt.plot(t, coup_d_cpl, label="coupling_drift (coupled)")
@@ -141,15 +157,27 @@ def main():
     plt.legend()
     plt.tight_layout()
 
+    # 4) Cumulative coupling drift (hidden work)
+    plt.figure()
+    plt.plot(t, cum_coup_dec, label="cumulative coupling_drift (decoupled)")
+    plt.plot(t, cum_coup_cpl, label="cumulative coupling_drift (coupled)")
+    plt.title("Cumulative coupling drift (hidden work)")
+    plt.xlabel("Step")
+    plt.ylabel("cumulative_drift")
+    plt.legend()
+    plt.tight_layout()
+
+    # 5) Reversibility proxy (normalized)
     plt.figure()
     plt.plot(t, rev_d_dec, label="rev_d (decoupled)")
     plt.plot(t, rev_d_cpl, label="rev_d (coupled)")
-    plt.title("Reversibility proxy")
+    plt.title("Reversibility proxy (normalized)")
     plt.xlabel("Step")
     plt.ylabel("rev_d")
     plt.legend()
     plt.tight_layout()
 
+    # Optional gv_score printout
     gv_dec = try_gv_score(a_dec, b_dec)
     gv_cpl = try_gv_score(a_cpl, b_cpl)
     if gv_dec is not None or gv_cpl is not None:
