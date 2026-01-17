@@ -1,23 +1,14 @@
 """
 gv_engine
 
-Core constraint-based engine for computing GV-style scalar risk
-and coupling metrics.
+Core constraint-based engine for computing GV-style scalar risk and coupling metrics.
 """
 
-from .core import (
-    Constraint,
-    gv_score,
-    SimpleSystem,
-)
-
-from .coupling import (
-    coupling_drift,
-)
+from .core import Constraint, gv_score
+from .coupling import coupling_drift
 
 __all__ = [
     "Constraint",
     "gv_score",
-    "SimpleSystem",
     "coupling_drift",
 ]
