@@ -1,4 +1,45 @@
 """
+INTERPRETATION GUIDE (plain English)
+
+This script compares two systems:
+1) Decoupled constraints (A and B grow independently)
+2) Coupled constraints (A and B exchange growth to stay balanced)
+
+Key ideas measured here are NOT performance or efficiency,
+but pressure, optionality, and survivability.
+
+Scalars:
+
+sat_d (satisfaction drift, normalized):
+- Measures how quickly total remaining headroom is consumed.
+- High values mean the system is still using available freedom.
+- Drops to zero when the system has exhausted optionality.
+- Coupled systems tend to exhaust headroom earlier.
+
+coup_d (coupling drift, engine):
+- Measures instantaneous imbalance pressure between constraints.
+- High values indicate latent force trying to equalize the system.
+- This is NOT motion; it is stored tension.
+- Goes to zero when symmetry or saturation is reached.
+
+cumulative coupling drift:
+- Integral of coupling drift over time.
+- Represents total hidden work required to maintain balance.
+- Decoupled systems defer this cost and accumulate it.
+- Coupled systems pay it continuously and keep it low.
+
+rev_d (reversibility proxy, normalized):
+- Measures how hard it would be to undo the most recent change.
+- High values mean the system still has escape routes.
+- Zero means the system is effectively locked in.
+- Coupled systems lock in earlier; decoupled systems remain flexible longer.
+
+Takeaway:
+Coupling trades long-term optionality for short-term coherence.
+Decoupling preserves optionality at the cost of accumulating tension.
+"""
+
+"""
 Simple trajectory experiment for gv-engine.
 
 Demonstrates:
