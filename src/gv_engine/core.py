@@ -3,7 +3,7 @@ from typing import Iterable
 import math
 
 
-@dataclass
+@dataclass(frozen=True)
 class Constraint:
     name: str
     value: float
@@ -11,8 +11,6 @@ class Constraint:
     weight: float = 1.0
 
     def utilization(self) -> float:
-        if self.capacity <= 0:
-            return 0.0
         return min(self.value / self.capacity, 1.0)
 
 
