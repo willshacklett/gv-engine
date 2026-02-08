@@ -1,3 +1,6 @@
+> **Start here (Hub):** https://github.com/willshacklett/god-variable-theory  
+> One-click ecosystem map • demos • CI enforcement • runtime monitoring
+
 # gv-engine
 
 A minimal, constraint-based engine for computing a single scalar strain score (GV-style)
